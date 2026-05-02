@@ -1,0 +1,15 @@
+[Unit]
+Description=Suspend Web Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/suspend-web
+Restart=on-failure
+RestartSec=2
+User=root
+Group=root
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
