@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use tokio::process::Command;
 use tokio::time::{sleep, Duration, Instant};
 
@@ -120,13 +120,74 @@ pub async fn send_signal(pid: i32, signal: &str) -> Result<(), String> {
 }
 
 pub async fn process_exists(pid: i32) -> bool {
-    match Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .status()
-        .await
-    {
-        Ok(status) => status.success(),
+    // Read /proc/<pid>/status directly so we can treat zombie processes
+    // (State: Z) as dead. kill -0 returns 0 for zombies, which caused
+    // false "still running" reports after SIGKILL.
+    let path = format!("/proc/{}/status", pid);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            for line in content.lines() {
+                if let Some(rest) = line.strip_prefix("State:") {
+                    // 'Z' = zombie: the process is dead but not yet reaped.
+                    return !rest.trim_start().starts_with('Z');
+                }
+            }
+            true
+        }
         Err(_) => false,
     }
+}
+
+/// Returns all transitive descendant PIDs of `root_pid` by taking a snapshot
+/// of `/proc` and doing a BFS over the parent→child relationships.
+///
+/// Reads `/proc` synchronously; `/proc` is an in-memory virtual filesystem so
+/// this is effectively instantaneous even with hundreds of processes.
+pub fn find_process_descendants(root_pid: i32) -> Vec<i32> {
+    // Build a ppid → [children] map from the current /proc snapshot.
+    let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
+
+    let entries = match std::fs::read_dir("/proc") {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    for entry in entries.flatten() {
+        let fname = entry.file_name();
+        let pid: i32 = match fname.to_string_lossy().parse() {
+            Ok(p) => p,
+            Err(_) => continue, // skip non-numeric /proc entries
+        };
+
+        let status_path = entry.path().join("status");
+        let content = match std::fs::read_to_string(&status_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        for line in content.lines() {
+            if let Some(rest) = line.strip_prefix("PPid:") {
+                if let Ok(ppid) = rest.trim().parse::<i32>() {
+                    children.entry(ppid).or_default().push(pid);
+                }
+                break;
+            }
+        }
+    }
+
+    // BFS from root_pid to collect every descendant.
+    let mut result = Vec::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(root_pid);
+
+    while let Some(pid) = queue.pop_front() {
+        if let Some(kids) = children.get(&pid) {
+            for &child in kids {
+                result.push(child);
+                queue.push_back(child);
+            }
+        }
+    }
+
+    result
 }
