@@ -5,6 +5,7 @@ use axum::{
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 
+mod events;
 mod handlers;
 mod launcher;
 mod library;
@@ -12,7 +13,10 @@ mod poster;
 mod process;
 mod suspend;
 
-use handlers::games::{game_kill_by_id_handler, games_handler, games_kill_handler, games_launch_handler, games_running_handler, games_running_stop_handler};
+use handlers::games::{
+    game_kill_by_id_handler, games_handler, games_kill_handler, games_launch_handler,
+    games_running_handler, games_running_stop_handler,
+};
 use handlers::poster::get_game_poster_handler;
 use handlers::suspend::suspend_handler;
 
@@ -20,6 +24,10 @@ const BIND_ADDR: &str = "0.0.0.0:7878";
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    events::on_boot().await;
+    events::spawn_sleep_listener();
+    events::spawn_gilrs_listener();
+
     let listener = TcpListener::bind(BIND_ADDR).await?;
     println!("suspend-web listening on http://{BIND_ADDR}");
 
