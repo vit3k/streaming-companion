@@ -3,6 +3,42 @@ use gilrs::{Button, EventType, Gilrs};
 use tokio::sync::mpsc;
 use zbus::proxy;
 
+// ── Webhook ───────────────────────────────────────────────────────────────────
+
+async fn call_webhook(event: &str) {
+    let url = match std::env::var("WEBHOOK_URL") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            eprintln!("[events] webhook '{event}' skipped: WEBHOOK_URL not set");
+            return;
+        }
+    };
+
+    let max_attempts = 5;
+    let retry_delay = tokio::time::Duration::from_secs(3);
+
+    for attempt in 1..=max_attempts {
+        match reqwest::Client::new().get(&url).send().await {
+            Ok(response) => {
+                println!("[events] webhook '{event}' -> {}", response.status());
+                return;
+            }
+            Err(error) if attempt < max_attempts => {
+                eprintln!(
+                    "[events] webhook '{event}' attempt {attempt}/{max_attempts} failed: {error}, retrying in {}s...",
+                    retry_delay.as_secs()
+                );
+                tokio::time::sleep(retry_delay).await;
+            }
+            Err(error) => {
+                eprintln!(
+                    "[events] webhook '{event}' failed after {max_attempts} attempts: {error}"
+                );
+            }
+        }
+    }
+}
+
 #[proxy(
     interface = "org.freedesktop.login1.Manager",
     default_service = "org.freedesktop.login1",
@@ -14,10 +50,10 @@ trait Login1Manager {
 }
 
 // ── Event hooks ───────────────────────────────────────────────────────────────
-
 /// Called once when the service process starts (boot or manual start).
 pub async fn on_boot() {
     println!("[events] boot");
+    // call_webhook("boot").await;
 }
 
 /// Called when the system is about to suspend/hibernate.
@@ -28,6 +64,7 @@ pub async fn on_sleep() {
 /// Called after the system wakes up from suspend/hibernate.
 pub async fn on_wake() {
     println!("[events] woke up from sleep");
+    // call_webhook("wake").await;
 }
 
 /// Called when a gamepad is connected.
