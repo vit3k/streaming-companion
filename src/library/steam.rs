@@ -35,6 +35,15 @@ pub fn read_all_steam_games() -> Vec<GameEntry> {
 
     steamapps_dirs.extend(read_extra_steamapps_dirs_from_env());
 
+    // Deduplicate by canonical (real) path so that symlinked Steam roots
+    // (e.g. ~/.steam/steam -> ~/.local/share/Steam) don't cause every game
+    // to appear twice.
+    let mut seen_canonical = HashSet::new();
+    steamapps_dirs.retain(|dir| {
+        let key = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        seen_canonical.insert(key)
+    });
+
     let mut seen_manifests = HashSet::new();
     let mut games: Vec<GameEntry> = Vec::new();
 
@@ -150,6 +159,33 @@ fn parse_steam_appmanifest(manifest_path: &Path) -> Option<GameEntry> {
     let content = fs::read_to_string(manifest_path).ok()?;
     let appid = extract_quoted_value(&content, "appid")?;
     let name = extract_quoted_value(&content, "name")?;
+
+    // StateFlags bit 2 (value 4) means "fully installed". Manifests can exist
+    // for games that are in your library but never installed (free weekends,
+    // family shares, demos, etc.), so we skip those.
+    let state_flags = extract_quoted_value(&content, "StateFlags")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+
+    if state_flags & 4 == 0 {
+        return None;
+    }
+
+    // Non-Steam launchers (Heroic, Lutris, etc.) sometimes plant fake
+    // appmanifest files with the real Steam App ID so the game shows up in
+    // Steam's UI, but the actual game files live elsewhere. Verify that the
+    // installdir listed in the manifest actually exists under
+    // steamapps/common/ — if it doesn't, this is a stub and we skip it.
+    let installdir = extract_quoted_value(&content, "installdir").unwrap_or_default();
+    if !installdir.is_empty() {
+        let common = manifest_path
+            .parent()
+            .map(|steamapps| steamapps.join("common").join(&installdir));
+
+        if !common.map(|p| p.is_dir()).unwrap_or(false) {
+            return None;
+        }
+    }
 
     Some(GameEntry {
         id: appid,

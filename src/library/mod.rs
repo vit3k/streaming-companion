@@ -2,7 +2,7 @@ mod epic;
 mod steam;
 pub mod vdf;
 
-pub use epic::read_all_epic_games_from_shortcuts;
+pub use epic::read_all_shortcut_games;
 pub use steam::read_all_steam_games;
 
 #[derive(Clone, Debug)]
@@ -15,7 +15,7 @@ pub struct GameEntry {
 pub fn read_all_games() -> Vec<GameEntry> {
     let mut games = Vec::new();
     games.extend(read_all_steam_games());
-    games.extend(read_all_epic_games_from_shortcuts());
+    games.extend(read_all_shortcut_games());
 
     games.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
     games
